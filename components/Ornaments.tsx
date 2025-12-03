@@ -29,13 +29,11 @@ const generateCardTexture = (text: string, subtext: string) => {
     canvas.height = 320;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-        ctx.fillStyle = '#fffaea'; // Cream paper
-        ctx.fillRect(0,0, 256, 320);
-        
         // Photo area placeholder
-        // Pure black to represent "blank" picture
+        // Pure black to represent "blank" picture area
+        // The 3D frame provides the white border
         ctx.fillStyle = '#000000';
-        ctx.fillRect(20, 20, 216, 216);
+        ctx.fillRect(0,0, 256, 320);
         
         // Gold Text
         ctx.fillStyle = '#d4af37';
@@ -57,10 +55,14 @@ const PhotoFrameMesh: React.FC<{
 }> = ({ item, mixFactor, texture }) => {
     const groupRef = useRef<THREE.Group>(null);
     const innerRef = useRef<THREE.Group>(null); // Inner group for tilt
+    const photoMatRef = useRef<THREE.MeshStandardMaterial>(null); // Ref for dynamic lighting
+    const frameMatRef = useRef<THREE.MeshStandardMaterial>(null);
     const currentMixRef = useRef(1);
+    
     // Temp vectors to avoid GC
     const vecPos = useMemo(() => new THREE.Vector3(), []);
     const vecScale = useMemo(() => new THREE.Vector3(), []);
+    const vecWorld = useMemo(() => new THREE.Vector3(), []); // For world position calc
 
     // Calculate Dynamic Geometry based on Image Aspect Ratio
     const { frameArgs, photoArgs, photoPos } = useMemo(() => {
@@ -86,7 +88,7 @@ const PhotoFrameMesh: React.FC<{
         // Polaroid Margins
         const mSide = 0.08;
         const mTop = 0.08;
-        const mBottom = 0.32; // Area for text/chin
+        const mBottom = 0.20; // Reduced margin for sleek look
 
         const fw = pw + mSide * 2;
         const fh = ph + mTop + mBottom;
@@ -114,8 +116,36 @@ const PhotoFrameMesh: React.FC<{
         vecPos.lerpVectors(item.chaosPos, item.targetPos, t);
         groupRef.current.position.copy(vecPos);
         
-        // 2. Scale Interpolation
+        // 2. Scale Interpolation with Dynamic Perspective
         vecScale.lerpVectors(item.chaosScale, item.targetScale, t);
+        
+        // Apply Exaggerated Perspective in Chaos Mode
+        const effectStrength = (1.0 - t);
+        
+        if (t < 0.99) {
+             // Get World Position to calculate distance to camera
+             // We need this because the parent group is rotating
+             groupRef.current.getWorldPosition(vecWorld);
+             const distToCamera = vecWorld.distanceTo(state.camera.position);
+             
+             // Perspective Scale
+             // Close (~10 units) -> Scale Up (1.5x)
+             // Far (~60 units) -> Scale Down (0.6x)
+             const perspectiveFactor = THREE.MathUtils.mapLinear(distToCamera, 10, 60, 1.5, 0.6);
+             const dynamicScale = lerp(1.0, perspectiveFactor, effectStrength);
+             vecScale.multiplyScalar(dynamicScale);
+
+             // Dynamic Brightness (Emissive) - INCREASED FOR BRIGHTER LOOK
+             if (photoMatRef.current) {
+                 // Adjusted Intensity: 
+                 const brightness = THREE.MathUtils.mapLinear(distToCamera, 12, 50, 0.9, 0.2);
+                 photoMatRef.current.emissiveIntensity = Math.max(0.2, brightness) * effectStrength;
+             }
+        } else {
+             // Formed State: Increased glow for visibility
+             if (photoMatRef.current) photoMatRef.current.emissiveIntensity = 0.25;
+        }
+
         groupRef.current.scale.copy(vecScale);
 
         // 3. Rotation Logic
@@ -129,7 +159,6 @@ const PhotoFrameMesh: React.FC<{
              // Chaos State: Face the camera (Billboard)
              groupRef.current.lookAt(state.camera.position);
              // Apply random tilt for natural "tossed photo" look
-             // Lerp to chaosTilt based on 1-t (inverse mix)
              innerRef.current.rotation.z = lerp(innerRef.current.rotation.z, item.chaosTilt, speed);
         }
     });
@@ -141,16 +170,30 @@ const PhotoFrameMesh: React.FC<{
                 {/* The Polaroid Frame (White Box) */}
                 <mesh>
                     <boxGeometry args={frameArgs} />
-                    <meshStandardMaterial color="#fffaea" roughness={0.8} />
+                    <meshStandardMaterial 
+                        ref={frameMatRef}
+                        color="#ffffff" 
+                        roughness={1.0} // Fully matte paper
+                        metalness={0.0}
+                        emissive="#ffffff" // Pure white emissive
+                        emissiveIntensity={0.6} // Increased frame glow
+                        toneMapped={false} 
+                    />
                 </mesh>
                 
                 {/* The Photo Image (Plane slightly in front) */}
                 <mesh position={photoPos}>
                     <planeGeometry args={photoArgs} />
                     <meshStandardMaterial 
+                        ref={photoMatRef}
                         map={texture} 
-                        roughness={0.6}
+                        emissiveMap={texture} 
+                        roughness={0.4} 
+                        metalness={0.0}
                         color="white"
+                        emissive="white" 
+                        emissiveIntensity={0.25} // Increased photo glow
+                        toneMapped={false} 
                     />
                 </mesh>
             </group>
@@ -195,33 +238,68 @@ const Ornaments: React.FC<OrnamentsProps> = ({ mixFactor, type, count, colors, s
     const items: OrnamentData[] = [];
     const { target } = generateFoliageData(count, 18, 7);
 
+    // Golden Angle for evenly distributing photos on a spiral (prevents overlap)
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
     for (let i = 0; i < count; i++) {
-      // Target: On the surface of the tree
-      const tPos = new THREE.Vector3(target[i*3], target[i*3+1], target[i*3+2]);
-      
-      // Push outward based on type
-      const pushOut = type === 'STAR' ? 1.15 : 1.08;
-      tPos.multiplyScalar(pushOut);
+      let tPos: THREE.Vector3;
+
+      if (type === 'PHOTO') {
+          // PHOTO DISTRIBUTION: GOLDEN SPIRAL (TREE STATE)
+          // Ensures no overlap on the tree
+          
+          const treeHeight = 18;
+          const treeRadiusBase = 7.0;
+          
+          const verticalSpread = 16;
+          const y = ((i / count) - 0.5) * verticalSpread;
+          
+          const hNormalized = (y + 9) / 18;
+          const r = (1 - hNormalized) * treeRadiusBase;
+          
+          const finalR = r + 1.2;
+          
+          const theta = i * goldenAngle;
+          
+          tPos = new THREE.Vector3(
+              finalR * Math.cos(theta),
+              y,
+              finalR * Math.sin(theta)
+          );
+          
+      } else {
+          // STANDARD ORNAMENTS
+          tPos = new THREE.Vector3(target[i*3], target[i*3+1], target[i*3+2]);
+          const pushOut = type === 'STAR' ? 1.15 : 1.08;
+          tPos.multiplyScalar(pushOut);
+      }
 
       // Chaos Position Logic
       let cPos: THREE.Vector3;
       let chaosTilt = 0;
       
       if (type === 'PHOTO') {
-          // PHOTO LOGIC: CYLINDRICAL DISTRIBUTION (Carousel/Roulette)
-          // Distribute around the tree center at a larger radius so they form a "wall"
-          const theta = Math.random() * Math.PI * 2; // Full 360 degrees
-          const radius = 14 + Math.random() * 4; // Radius 14 to 18 (Outside the tree)
-          const yHeight = (Math.random() - 0.5) * 20; // Spread vertically -10 to 10
+          // PHOTO CHAOS: CYLINDRICAL SPIRAL (UNFOLDED STATE)
+          // Prevents stacking in the unfolded/chaos state by using deterministic math
+          // instead of random values.
+          
+          const chaosRadius = 18; // Wide radius
+          const chaosHeightRange = 12; // -6 to 6
+          
+          // Distribute height evenly based on index
+          const yHeight = ((i / count) - 0.5) * chaosHeightRange;
+          
+          // Distribute angle evenly using Golden Angle to avoid vertical columns
+          const theta = i * goldenAngle;
           
           cPos = new THREE.Vector3(
-              radius * Math.cos(theta),
+              chaosRadius * Math.cos(theta),
               yHeight,
-              radius * Math.sin(theta)
+              chaosRadius * Math.sin(theta)
           );
           
-          // Random tilt between -15 and +15 degrees for natural look
-          chaosTilt = (Math.random() - 0.5) * 0.5; 
+          // Deterministic tilt to maintain "messy" look without collisions
+          chaosTilt = ((i % 5) - 2) * 0.15; 
       } else {
           // STANDARD LOGIC: Random Sphere explosion
           cPos = randomVector3(25);
@@ -247,9 +325,8 @@ const Ornaments: React.FC<OrnamentsProps> = ({ mixFactor, type, count, colors, s
       // Chaos Scale (Exploded State)
       let chaosScale = targetScale.clone();
       if (type === 'PHOTO') {
-          // Magnify photos significantly when in chaos mode
-          // Add random size variation (2.5x to 3.5x) to make them distinct
-          const photoScale = 2.5 + Math.random() * 1.0;
+          // Magnify photos significantly when in chaos mode.
+          const photoScale = 3.5 + Math.random() * 1.5;
           chaosScale.multiplyScalar(photoScale);
       }
 
