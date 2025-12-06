@@ -1,7 +1,6 @@
 
 import React, { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { lerp } from '../utils/math';
 
@@ -19,9 +18,6 @@ const createStarShape = (outerRadius: number, innerRadius: number, points: numbe
     for(let i = 0; i < points * 2; i++) {
         const radius = (i % 2 === 0) ? outerRadius : innerRadius;
         const angle = i * step;
-        // Rotate -PI/2 to align point upwards if needed, but default 0 starts at right usually. 
-        // Let's standard math: cos/sin.
-        // Actually, let's just draw it.
         // Standard angle starts at 3 o'clock. We want top point at 12 o'clock.
         // Rotation offset = PI/2.
         const effectiveAngle = angle + Math.PI / 2;
@@ -33,6 +29,7 @@ const createStarShape = (outerRadius: number, innerRadius: number, points: numbe
 
 const TopStar: React.FC<TopStarProps> = ({ mixFactor }) => {
   const groupRef = useRef<THREE.Group>(null);
+  const visualRef = useRef<THREE.Group>(null);
   const starMeshRef = useRef<THREE.Mesh>(null);
   const currentMixRef = useRef(1);
   
@@ -51,7 +48,7 @@ const TopStar: React.FC<TopStarProps> = ({ mixFactor }) => {
   }, []);
 
   useFrame((state, delta) => {
-      if (!groupRef.current || !starMeshRef.current) return;
+      if (!groupRef.current || !visualRef.current || !starMeshRef.current) return;
 
       const speed = 2.0 * delta;
       currentMixRef.current = lerp(currentMixRef.current, mixFactor, speed);
@@ -67,10 +64,10 @@ const TopStar: React.FC<TopStarProps> = ({ mixFactor }) => {
       groupRef.current.position.set(0, currentY, 0);
 
       // 2. Rotation Logic
-      // Always slowly spin
+      // Always slowly spin the mesh itself
       starMeshRef.current.rotation.y += delta * 0.5;
       
-      // Add chaos tilt
+      // Apply chaos tilt to the main group
       if (t < 0.9) {
           const chaosTilt = (1 - t) * 0.5;
           groupRef.current.rotation.z = Math.sin(state.clock.elapsedTime) * chaosTilt;
@@ -81,42 +78,33 @@ const TopStar: React.FC<TopStarProps> = ({ mixFactor }) => {
       }
 
       // 3. Scale Logic
-      // Pop in/out slightly or just scale up in chaos?
-      // Let's keep scale stable but maybe pulse
-      const pulse = 1.0 + Math.sin(state.clock.elapsedTime * 3) * 0.05;
-      groupRef.current.scale.setScalar(pulse);
+      // Static scale to prevent flickering/pulsing artifacts
+      visualRef.current.scale.setScalar(1.0);
   });
 
   return (
     <group ref={groupRef}>
-        {/* The Physical Star */}
-        <mesh ref={starMeshRef} geometry={geometry} castShadow>
-            <meshStandardMaterial 
-                color="#FFD700" 
-                emissive="#FFD700"
-                emissiveIntensity={2.0} // Very bright
-                roughness={0.1}
-                metalness={0.9}
-                toneMapped={false} // Allow it to bloom heavily
-            />
-        </mesh>
+        {/* Visuals Group */}
+        <group ref={visualRef}>
+            {/* The Physical Star - Removed castShadow to prevent tree flickering */}
+            <mesh ref={starMeshRef} geometry={geometry}>
+                <meshStandardMaterial 
+                    color="#FFD700" 
+                    emissive="#FFD700"
+                    emissiveIntensity={2.0} // Very bright
+                    roughness={0.1}
+                    metalness={0.9}
+                    toneMapped={false} // Allow it to bloom heavily
+                />
+            </mesh>
+        </group>
 
-        {/* Inner Light Source */}
+        {/* Inner Light Source - Remains stable in scale */}
         <pointLight 
             color="#ffeebf" 
             intensity={3.0} 
             distance={15} 
             decay={2} 
-        />
-
-        {/* Floating Sparkles for magical effect */}
-        <Sparkles 
-            count={25} 
-            scale={4} 
-            size={4} 
-            speed={0.4} 
-            opacity={0.8} 
-            color="#FFFFAA" 
         />
     </group>
   );

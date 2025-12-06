@@ -1,9 +1,11 @@
+
 import React, { useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { lerp } from '../utils/math';
 
 const snowVertexShader = `
+  precision highp float;
   uniform float uTime; // Global Time
   uniform float uMix;  // Still used for drift amplitude
   
@@ -39,6 +41,7 @@ const snowVertexShader = `
 `;
 
 const snowFragmentShader = `
+  precision highp float;
   varying float vAlpha;
 
   void main() {
@@ -52,7 +55,9 @@ const snowFragmentShader = `
 `;
 
 const Snow: React.FC<{ mixFactor: number }> = ({ mixFactor }) => {
+  // RESTORED: Full snow count
   const count = 3000;
+
   const pointsRef = useRef<THREE.Points>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
   const currentMixRef = useRef(1);
@@ -76,9 +81,8 @@ const Snow: React.FC<{ mixFactor: number }> = ({ mixFactor }) => {
         vel[i*3+2] = Math.random() * 0.5 + 0.2;
     }
     return { positions: pos, scales: sc, velocities: vel };
-  }, []);
+  }, [count]);
 
-  // Fix: Memoize uniforms to ensure stable reference across renders
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uMix: { value: 1 }
@@ -86,20 +90,13 @@ const Snow: React.FC<{ mixFactor: number }> = ({ mixFactor }) => {
 
   useFrame((state, delta) => {
      if (materialRef.current && pointsRef.current) {
-         // Smooth mix factor
          currentMixRef.current = lerp(currentMixRef.current, mixFactor, delta * 2.0);
          
-         // 1. Uniform Updates
          materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
          materialRef.current.uniforms.uMix.value = currentMixRef.current;
 
-         // 2. Camera Locking (Infinite Snow Effect)
-         // We lock the X/Y position of the snow volume to the camera.
-         // This removes parallax "swimming" relative to the background, 
-         // making it feel like an atmospheric layer attached to the viewer.
          pointsRef.current.position.x = camera.position.x;
          pointsRef.current.position.y = camera.position.y;
-         // We do NOT lock Z, to preserve depth perception as we zoom/move.
      }
   });
 

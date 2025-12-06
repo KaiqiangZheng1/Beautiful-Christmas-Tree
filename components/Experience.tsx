@@ -46,7 +46,7 @@ const CRYSTAL_COLORS = ['#F0F8FF', '#E0FFFF', '#B0E0E6']; // Ice Blues and White
 // Set Candy base to white, as stripes are handled via texture in Ornaments.tsx
 const CANDY_COLORS = ['#FFFFFF']; 
 
-// Handles Camera Parallax, Tree Rotation (Drag) and Zoom (Wheel)
+// Handles Camera Parallax, Tree Rotation (Drag) and Zoom (Wheel + Pinch)
 const SceneController: React.FC<{ 
     inputRef: React.MutableRefObject<{ x: number, y: number, isDetected?: boolean }>, 
     groupRef: React.RefObject<THREE.Group> 
@@ -58,6 +58,9 @@ const SceneController: React.FC<{
     const zoomTarget = useRef(32); 
     const isDragging = useRef(false);
     const lastPointerX = useRef(0);
+    
+    // Touch Pinch State
+    const lastTouchDistance = useRef<number | null>(null);
     
     // Physics State
     const rotationVelocity = useRef(0.002); // Start with slow auto-spin
@@ -80,7 +83,8 @@ const SceneController: React.FC<{
         };
 
         const onPointerDown = (e: PointerEvent) => {
-            if (e.button === 0) { 
+            // Allow primary pointer (mouse or first touch) to start dragging
+            if (e.isPrimary && e.button === 0) { 
                 isDragging.current = true;
                 lastPointerX.current = e.clientX;
                 canvas.setPointerCapture(e.pointerId);
@@ -89,12 +93,15 @@ const SceneController: React.FC<{
         };
 
         const onPointerUp = (e: PointerEvent) => {
-            isDragging.current = false;
-            canvas.releasePointerCapture(e.pointerId);
+            if (e.isPrimary) {
+                isDragging.current = false;
+                canvas.releasePointerCapture(e.pointerId);
+            }
         };
 
         const onPointerMove = (e: PointerEvent) => {
-            if (isDragging.current && groupRef.current) {
+            // Only rotate if primary pointer and NOT currently pinching
+            if (e.isPrimary && isDragging.current && groupRef.current && lastTouchDistance.current === null) {
                 const deltaX = e.clientX - lastPointerX.current;
                 lastPointerX.current = e.clientX;
                 // Mouse still uses impulse/velocity logic
@@ -104,12 +111,53 @@ const SceneController: React.FC<{
             }
         };
 
+        // --- Touch Pinch Logic ---
+        const onTouchStart = (e: TouchEvent) => {
+            if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                lastTouchDistance.current = Math.sqrt(dx * dx + dy * dy);
+            }
+        };
+
+        const onTouchMove = (e: TouchEvent) => {
+            if (e.touches.length === 2) {
+                if (e.cancelable) e.preventDefault(); // Stop browser zoom/scroll
+
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (lastTouchDistance.current !== null) {
+                    const diff = lastTouchDistance.current - distance;
+                    // Diff > 0: Pinched In -> Zoom Out (Increase Z)
+                    // Diff < 0: Pinched Out -> Zoom In (Decrease Z)
+                    
+                    const sensitivity = 0.15; // Zoom speed multiplier
+                    zoomTarget.current += diff * sensitivity;
+                    zoomTarget.current = THREE.MathUtils.clamp(zoomTarget.current, 12, 55);
+                }
+                
+                lastTouchDistance.current = distance;
+            }
+        };
+
+        const onTouchEnd = () => {
+            lastTouchDistance.current = null;
+        };
+
         canvas.addEventListener('wheel', onWheel, { passive: false });
         canvas.addEventListener('pointerdown', onPointerDown);
         canvas.addEventListener('pointerup', onPointerUp);
         canvas.addEventListener('pointermove', onPointerMove);
         canvas.addEventListener('pointerleave', onPointerUp);
         canvas.addEventListener('pointercancel', onPointerUp);
+        
+        // Touch Listeners
+        canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+        canvas.addEventListener('touchend', onTouchEnd);
+        canvas.addEventListener('touchcancel', onTouchEnd);
 
         return () => {
             canvas.removeEventListener('wheel', onWheel);
@@ -118,6 +166,11 @@ const SceneController: React.FC<{
             canvas.removeEventListener('pointermove', onPointerMove);
             canvas.removeEventListener('pointerleave', onPointerUp);
             canvas.removeEventListener('pointercancel', onPointerUp);
+            
+            canvas.removeEventListener('touchstart', onTouchStart);
+            canvas.removeEventListener('touchmove', onTouchMove);
+            canvas.removeEventListener('touchend', onTouchEnd);
+            canvas.removeEventListener('touchcancel', onTouchEnd);
         };
     }, [gl, groupRef]);
 
@@ -138,7 +191,7 @@ const SceneController: React.FC<{
         const camX = currentInput.current.x * 4; 
         const camY = currentInput.current.y * 2; 
         const camZ = zoomTarget.current + Math.abs(currentInput.current.x) * 2; 
-        camera.position.lerp(vec.set(camX, camY, camZ), 2.0 * safeDelta);
+        camera.position.lerp(vec.set(camX, camY, camZ), 4.0 * safeDelta); // Slightly faster camera catchup
         camera.lookAt(0, 0, 0);
 
         // 3. Tree Rotation Physics
@@ -146,37 +199,26 @@ const SceneController: React.FC<{
             
             if (isHandDetected) {
                 // --- HAND CONTROL (GRAB MODE) ---
-                
-                // Sensitivity: Full screen width (x: -1 to 1) = 1.2 Full Rotation
                 const HAND_ROTATION_FACTOR = Math.PI * 1.2; 
                 const targetHandRotation = currentInput.current.x * HAND_ROTATION_FACTOR;
 
                 if (!wasDetected.current) {
-                    // Just grabbed
                     grabOffset.current = groupRef.current.rotation.y - targetHandRotation;
                     rotationVelocity.current = 0;
                 }
 
-                // Desired Angle
                 const targetAngle = targetHandRotation + grabOffset.current;
-                
-                // PERFORMANCE FIX: 
-                // Reduced smoothFactor from 15.0 to 6.0. 
-                // Since we throttled the AI to save GPU, we need a looser spring (more smoothing)
-                // to interpolate the lower framerate of the hand data.
                 const smoothFactor = 6.0 * safeDelta;
                 
                 const prevRot = groupRef.current.rotation.y;
                 groupRef.current.rotation.y = THREE.MathUtils.lerp(prevRot, targetAngle, smoothFactor);
                 
-                // Calculate implicit velocity
                 rotationVelocity.current = (groupRef.current.rotation.y - prevRot);
 
                 wasDetected.current = true;
 
             } else {
                 // --- IDLE / MOUSE CONTROL (INERTIA MODE) ---
-                
                 if (wasDetected.current) {
                     if (Math.abs(rotationVelocity.current) < 0.0001) {
                         rotationVelocity.current = 0.002; 
@@ -184,10 +226,9 @@ const SceneController: React.FC<{
                     wasDetected.current = false;
                 }
 
+                // Apply velocity if NOT dragging manually
                 if (!isDragging.current) {
-                    // Auto-spin / Inertia
                     groupRef.current.rotation.y += rotationVelocity.current;
-                    
                     const baseSpeed = 0.002;
                     rotationVelocity.current = THREE.MathUtils.lerp(rotationVelocity.current, baseSpeed, safeDelta * 0.5);
                 }
@@ -214,7 +255,7 @@ const SceneContent: React.FC<ExperienceProps> = ({ mixFactor, colors, inputRef, 
       <pointLight position={[0, 10, 10]} intensity={0.5} color="#ffffff" />
       
       <Environment 
-        files='/hdri/potsdamer_platz_1k.hdr' 
+        files='public/hdri/potsdamer_platz_1k.hdr'
         background={false} 
       />
       <Stars radius={100} depth={50} count={3000} factor={4} saturation={0} fade speed={1} />
@@ -222,17 +263,10 @@ const SceneContent: React.FC<ExperienceProps> = ({ mixFactor, colors, inputRef, 
       <Snow mixFactor={mixFactor} />
 
       <group ref={groupRef} position={[0, 0, 0]}>
-        
-        {/* The Golden Top Star */}
         <TopStar mixFactor={mixFactor} />
-
-        {/* Dense Foliage */}
         <Foliage mixFactor={mixFactor} colors={colors} />
-        
-        {/* Spiral Light Strip */}
         <SpiralLights mixFactor={mixFactor} />
         
-        {/* Ornaments - Realistic Objects */}
         <Ornaments 
             mixFactor={mixFactor} 
             type="BALL" 
@@ -242,28 +276,28 @@ const SceneContent: React.FC<ExperienceProps> = ({ mixFactor, colors, inputRef, 
         />
         <Ornaments 
             mixFactor={mixFactor} 
-            type="BOX" // Gift Boxes
+            type="BOX" 
             count={30} 
             scale={0.6}
             colors={BOX_COLORS} 
         />
         <Ornaments 
             mixFactor={mixFactor} 
-            type="STAR" // 5-Point Stars
+            type="STAR" 
             count={25} 
             scale={0.5}
             colors={STAR_COLORS} 
         />
         <Ornaments 
             mixFactor={mixFactor} 
-            type="CRYSTAL" // Snowflakes
+            type="CRYSTAL" 
             count={40} 
             scale={0.4}
             colors={CRYSTAL_COLORS} 
         />
         <Ornaments 
             mixFactor={mixFactor} 
-            type="CANDY" // Candy Canes
+            type="CANDY" 
             count={40} 
             scale={0.8}
             colors={CANDY_COLORS} 
@@ -277,7 +311,7 @@ const SceneContent: React.FC<ExperienceProps> = ({ mixFactor, colors, inputRef, 
         />
       </group>
 
-      <EffectComposer enableNormalPass={false}>
+      <EffectComposer enableNormalPass={false} multisampling={0}>
         <Bloom 
             luminanceThreshold={0.9} 
             mipmapBlur 
@@ -293,8 +327,10 @@ const SceneContent: React.FC<ExperienceProps> = ({ mixFactor, colors, inputRef, 
 const Experience: React.FC<ExperienceProps> = (props) => {
   return (
     <Canvas
-      dpr={[1, 1.25]} // Cap DPR at 1.25 to save GPU for AI
-      camera={{ position: [0, 0, 32], fov: 45 }}
+      dpr={[1, 1.25]} 
+      // OPTIMIZATION: Tighten near/far planes to increase depth buffer precision on mobile.
+      // 5-80 covers the tree nicely (centered at 0, camera at 32).
+      camera={{ position: [0, 0, 32], fov: 45, near: 5, far: 80 }}
       gl={{ antialias: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.0 }}
       shadows
       style={{ touchAction: 'none' }}

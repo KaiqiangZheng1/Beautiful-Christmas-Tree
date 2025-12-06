@@ -1,9 +1,11 @@
+
 import React, { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { generateFoliageData, lerp } from '../utils/math';
 
 const vertexShader = `
+  precision highp float;
   uniform float uTime;
   uniform float uMix;
   uniform float uSize;
@@ -39,6 +41,7 @@ const vertexShader = `
 `;
 
 const fragmentShader = `
+  precision highp float;
   uniform vec3 uColorBottom;
   uniform vec3 uColorTop;
   
@@ -79,21 +82,22 @@ interface FoliageProps {
 }
 
 const Foliage: React.FC<FoliageProps> = ({ mixFactor, colors }) => {
-  const count = 75000; // Increased density
+  // RESTORED: Full particle count for high fidelity on all devices
+  const count = 75000; 
+  
   const materialRef = useRef<THREE.ShaderMaterial>(null);
   
   const currentMixRef = useRef(1);
   
-  const { target, chaos, randoms } = useMemo(() => generateFoliageData(count, 18, 7.5), []);
+  const { target, chaos, randoms } = useMemo(() => generateFoliageData(count, 18, 7.5), [count]);
 
-  // Fix: Memoize uniforms so they are stable across renders
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uMix: { value: 1 },
     uSize: { value: 4.0 }, 
     uColorBottom: { value: new THREE.Color(colors.bottom) },
     uColorTop: { value: new THREE.Color(colors.top) }
-  }), []); // Empty dependency array, values are updated in useFrame
+  }), []);
 
   useFrame((state, delta) => {
     if (materialRef.current) {
@@ -103,7 +107,6 @@ const Foliage: React.FC<FoliageProps> = ({ mixFactor, colors }) => {
       materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
       materialRef.current.uniforms.uMix.value = currentMixRef.current;
       
-      // Update color uniforms manually to handle prop changes since uniforms object is memoized
       materialRef.current.uniforms.uColorBottom.value.set(colors.bottom);
       materialRef.current.uniforms.uColorTop.value.set(colors.top);
     }

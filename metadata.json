@@ -1,6 +1,6 @@
 {
-  "name": "Grand Luxury Interactive Christmas Tree",
-  "description": "A high-fidelity, cinematic 3D Christmas experience featuring a dynamic, gesture-controlled luxury tree with 'Trump-style' aesthetics, dual-state chaos physics, and interactive polaroid memories.",
+  "name": "Awesome Christmas Tree",
+  "description": "A high-fidelity, cinematic 3D Christmas experience featuring a dynamic, gesture-controlled Christmas tree with dual-state chaos physics, and interactive polaroid memories.",
   "requestFramePermissions": [
     "camera"
   ]

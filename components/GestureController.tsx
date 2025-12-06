@@ -41,7 +41,7 @@ const GestureController: React.FC<GestureControllerProps> = ({ onGesture, isGuiV
         
         if (isMounted) setLoadingMessage("Loading Local AI Model...");
         
-        const LOCAL_MODEL_URL = '/models/handpose/model.json';
+        const LOCAL_MODEL_URL = 'public/models/handpose/model.json';
 
         // Fix: Cast configuration to any to bypass type check for modelUrl support
         const net = await handpose.load({
@@ -184,8 +184,9 @@ const GestureController: React.FC<GestureControllerProps> = ({ onGesture, isGuiV
     }
   }, [model, loading, runDetection]);
 
-  // Reduced mobile size to w-24 h-32 (Portrait) to be less obtrusive while maintaining portrait orientation
-  const boxStyle = "w-24 h-32 md:w-48 md:h-36 rounded-lg border-[#d4af37]/50 bg-black/90 border overflow-hidden shadow-[0_0_20px_rgba(212,175,55,0.2)]";
+  // Constrain mobile size strictly to w-28 h-36 (Portrait) 
+  // IMPORTANT: Do NOT add w-full h-full to the inner div, it will cause the video to expand to intrinsic size.
+  const boxStyle = "w-28 h-36 md:w-48 md:h-36 rounded-lg border-[#d4af37]/50 bg-black/90 border overflow-hidden shadow-[0_0_20px_rgba(212,175,55,0.2)]";
 
   return (
     <div 
@@ -193,7 +194,7 @@ const GestureController: React.FC<GestureControllerProps> = ({ onGesture, isGuiV
         isGuiVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 pointer-events-none'
       }`}
     >
-      <div className={`relative w-full h-full ${boxStyle}`}>
+      <div className={`relative ${boxStyle}`}>
           
           {cameraError ? (
              <div className="flex flex-col items-center justify-center h-full text-[#d4af37] p-2 text-center gap-2">
